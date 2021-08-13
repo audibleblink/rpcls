@@ -3,14 +3,15 @@ package main
 import (
 	"fmt"
 	"os"
-	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
 const (
-	PROCESS_ALL_ACCESS = 0x1F0FFF
+	PROCESS_ALL_ACCESS   = 0x1F0FFF
+	SE_PRIVILEGE_ENABLED = 0x00000002
+	PID                  = 0
 )
 
 func main() {
@@ -19,8 +20,9 @@ func main() {
 		fmt.Printf("seDebug: %s\n", err)
 		os.Exit(1)
 	}
+	// time.Sleep(90 * time.Second)
 
-	pidHandle, err := handleToSelf()
+	pidHandle, err := handleForPid(PID)
 	if err != nil {
 		fmt.Printf("pidHandle: %s\n", err)
 		os.Exit(1)
@@ -41,16 +43,16 @@ func main() {
 	}
 }
 
-func handleToSelf() (handle windows.Handle, err error) {
-	// var attrs uint32 = windows.PROCESS_QUERY_INFORMATION | windows.PROCESS_VM_READ
-	attrs := uint32(PROCESS_ALL_ACCESS)
-	pid := uint32(os.Getpid())
-	// pid := uint32(16920)
-	handle, err = windows.OpenProcess(attrs, false, pid)
+func handleForPid(pid int) (handle windows.Handle, err error) {
+	if pid == 0 {
+		return windows.CurrentProcess(), err
+	}
+	// attrs := PROCESS_ALL_ACCESS
+	attrs := windows.PROCESS_QUERY_INFORMATION | windows.PROCESS_VM_READ
+	handle, err = windows.OpenProcess(uint32(attrs), false, uint32(pid))
 	return
 }
 
-// https://github.com/shenwei356/rush/blob/3699d8775d5f4d429351700fea4231de0ec1e281/process/process_windows.go#L251
 func getProcessBasicInformation(processHandle windows.Handle) (pbi windows.PROCESS_BASIC_INFORMATION, err error) {
 	pbiLen := uint32(unsafe.Sizeof(pbi))
 	err = windows.NtQueryInformationProcess(processHandle, windows.ProcessBasicInformation, unsafe.Pointer(&pbi), pbiLen, &pbiLen)
@@ -60,67 +62,30 @@ func getProcessBasicInformation(processHandle windows.Handle) (pbi windows.PROCE
 
 	pbiStructLen := unsafe.Sizeof(windows.PROCESS_BASIC_INFORMATION{})
 	if pbiLen < uint32(pbiStructLen) {
-		err = fmt.Errorf("Bad size for PROCESS_BASIC_INFORMATION")
+		err = fmt.Errorf("Bad size for process_basic_information")
 		return
 	}
 	return
 }
 
-func sePrivEnable(s string) error {
+func sePrivEnable(privString string) (err error) {
+	procHandle := windows.CurrentProcess()
 
-	TH32CS_SNAPPROCESS := 0x00000002
+	var tokenHandle windows.Token
+	windows.OpenProcessToken(procHandle, windows.TOKEN_ADJUST_PRIVILEGES, &tokenHandle)
 
-	type LUID struct {
-		LowPart  uint32
-		HighPart int32
-	}
-	type LUID_AND_ATTRIBUTES struct {
-		Luid       LUID
-		Attributes uint32
-	}
-	type TOKEN_PRIVILEGES struct {
-		PrivilegeCount uint32
-		Privileges     [1]LUID_AND_ATTRIBUTES
-	}
-
-	modadvapi32 := windows.NewLazySystemDLL("advapi32.dll")
-	procAdjustTokenPrivileges := modadvapi32.NewProc("AdjustTokenPrivileges")
-
-	procLookupPriv := modadvapi32.NewProc("LookupPrivilegeValueW")
-	var tokenHandle syscall.Token
-	thsHandle, err := syscall.GetCurrentProcess()
+	var luid windows.LUID
+	err = windows.LookupPrivilegeValue(nil, windows.StringToUTF16Ptr(privString), &luid)
 	if err != nil {
 		return err
 	}
-	syscall.OpenProcessToken(
-		thsHandle,                       //  HANDLE  ProcessHandle,
-		syscall.TOKEN_ADJUST_PRIVILEGES, //	DWORD   DesiredAccess,
-		&tokenHandle,                    //	PHANDLE TokenHandle
-	)
-	var luid LUID
-	r, _, e := procLookupPriv.Call(
-		uintptr(0), //LPCWSTR lpSystemName,
-		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(s))), //LPCWSTR lpName,
-		uintptr(unsafe.Pointer(&luid)),                       //PLUID   lpLuid
-	)
-	if r == 0 {
-		return e
-	}
-	SE_PRIVILEGE_ENABLED := uint32(TH32CS_SNAPPROCESS)
-	privs := TOKEN_PRIVILEGES{}
+
+	privs := &windows.Tokenprivileges{}
 	privs.PrivilegeCount = 1
 	privs.Privileges[0].Luid = luid
-	privs.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
-	r, _, e = procAdjustTokenPrivileges.Call(
-		uintptr(tokenHandle),
-		uintptr(0),
-		uintptr(unsafe.Pointer(&privs)),
-		uintptr(0),
-		uintptr(0),
-		uintptr(0),
-	)
-	if r == 0 {
-		return e
-	}
-	return nil
+	privs.Privileges[0].Attributes = uint32(SE_PRIVILEGE_ENABLED)
+
+	returnLen := uint32(0)
+	err = windows.AdjustTokenPrivileges(tokenHandle, false, privs, 0, nil, &returnLen)
+	return err
 }
