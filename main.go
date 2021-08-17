@@ -13,8 +13,8 @@ const (
 	ListEntryOffset      = 0x20
 	PROCESS_ALL_ACCESS   = 0x1F0FFF
 	SE_PRIVILEGE_ENABLED = 0x00000002
-	PID                  = 8408
-	// PID = 0
+	// PID                  = 2640
+	PID = 0
 )
 
 func main() {
@@ -36,30 +36,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// partially fill the peb to get access to the Ldr.InMemoryOrderModuleList
-	err = fillRemotePEB(pidHandle, &pbi)
+	dlls, err := getDLLs(pidHandle, pbi)
 	if err != nil {
-		fmt.Printf("readRemotePEB: %s\n", err)
+		fmt.Printf("getDLLs: %s\n", err)
 		os.Exit(1)
 	}
 
-	head := windows.LDR_DATA_TABLE_ENTRY{}
-	head.InMemoryOrderLinks.Flink = pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList.Flink
-
-	stop := uintptr(unsafe.Pointer(pbi.PebBaseAddress.Ldr)) - ListEntryOffset
-
-	for uintptr(unsafe.Pointer(head.InMemoryOrderLinks.Flink)) != stop {
-		base := unsafe.Pointer(head.InMemoryOrderLinks.Flink)
-		size := uint32(unsafe.Sizeof(head))
-		dest := unsafe.Pointer(&head.InMemoryOrderLinks.Flink)
-		err = readMemory(pidHandle, base, dest, size)
-		if err != nil {
-			fmt.Printf("fart: %s\n", err)
-			os.Exit(1)
-		}
-		fmt.Printf("%#v\n", head.FullDllName.String())
+	for _, dll := range dlls {
+		fmt.Println(dll)
 	}
 
+	// partially fill the peb to get access to the Ldr.InMemoryOrderModuleList
+	// err = fillRemotePEB(pidHandle, &pbi)
+	// if err != nil {
+	// 	fmt.Printf("readRemotePEB: %s\n", err)
+	// 	os.Exit(1)
+	// }
 }
 
 func handleForPid(pid int) (handle windows.Handle, err error) {
