@@ -1,4 +1,4 @@
-package main
+package privs
 
 import (
 	"unsafe"
@@ -6,7 +6,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func sePrivEnable(privString string) (err error) {
+const (
+	SE_PRIVILEGE_ENABLED = 0x00000002
+)
+
+func SePrivEnable(privString string) (err error) {
 
 	var luid windows.LUID
 	err = windows.LookupPrivilegeValue(nil, windows.StringToUTF16Ptr(privString), &luid)
