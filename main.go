@@ -9,11 +9,8 @@ import (
 )
 
 const (
-	SizeofListEntry      = 0x20
-	ListEntryOffset      = 0x20
-	PROCESS_ALL_ACCESS   = 0x1F0FFF
 	SE_PRIVILEGE_ENABLED = 0x00000002
-	PID                  = 8408
+	PID                  = 15080
 	// PID = 0
 )
 
@@ -36,30 +33,46 @@ func main() {
 		os.Exit(1)
 	}
 
-	// partially fill the peb to get access to the Ldr.InMemoryOrderModuleList
 	err = fillRemotePEB(pidHandle, &pbi)
 	if err != nil {
 		fmt.Printf("readRemotePEB: %s\n", err)
 		os.Exit(1)
 	}
 
-	head := windows.LDR_DATA_TABLE_ENTRY{}
-	head.InMemoryOrderLinks.Flink = pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList.Flink
+	head := windows.LDR_DATA_TABLE_ENTRY{
+		InMemoryOrderLinks: pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList,
+	}
 
-	stop := uintptr(unsafe.Pointer(pbi.PebBaseAddress.Ldr)) - ListEntryOffset
-
-	for uintptr(unsafe.Pointer(head.InMemoryOrderLinks.Flink)) != stop {
+	for {
+		// read the current LIST_ENTRY  flink into a LDR_DATA_TABLE_ENTRY,
+		// inherently casting it
 		base := unsafe.Pointer(head.InMemoryOrderLinks.Flink)
 		size := uint32(unsafe.Sizeof(head))
 		dest := unsafe.Pointer(&head.InMemoryOrderLinks.Flink)
 		err = readMemory(pidHandle, base, dest, size)
 		if err != nil {
-			fmt.Printf("fart: %s\n", err)
+			fmt.Printf("could not move to next flink: %s\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("%#v\n", head.FullDllName.String())
-	}
 
+		// populate the DLL Name buffer with the remote address currently
+		// stored at head.FullDllName
+		dllNameUTF16 := make([]uint16, head.FullDllName.Length)
+		base = unsafe.Pointer(head.FullDllName.Buffer)
+		size = uint32(head.FullDllName.Length)
+		dest = unsafe.Pointer(&dllNameUTF16[0])
+		err = readMemory(pidHandle, base, dest, size)
+		if err != nil {
+			fmt.Printf("could not read dll name string: %s\n", err)
+			os.Exit(1)
+		}
+
+		name := windows.UTF16ToString(dllNameUTF16)
+		if name == "" {
+			os.Exit(0)
+		}
+		fmt.Println(name)
+	}
 }
 
 func handleForPid(pid int) (handle windows.Handle, err error) {
@@ -67,8 +80,7 @@ func handleForPid(pid int) (handle windows.Handle, err error) {
 		handle = windows.CurrentProcess()
 		return
 	}
-	// attrs := windows.PROCESS_QUERY_INFORMATION | windows.PROCESS_VM_READ
-	attrs := PROCESS_ALL_ACCESS
+	attrs := windows.PROCESS_QUERY_INFORMATION | windows.PROCESS_VM_READ
 	handle, err = windows.OpenProcess(uint32(attrs), true, uint32(pid))
 	return
 }
@@ -76,7 +88,6 @@ func handleForPid(pid int) (handle windows.Handle, err error) {
 func procBasicInfo(handle windows.Handle) (pbi windows.PROCESS_BASIC_INFORMATION, err error) {
 	pbiSize := unsafe.Sizeof(windows.PROCESS_BASIC_INFORMATION{})
 	var returnedLen uint32
-
 	err = windows.NtQueryInformationProcess(
 		handle,
 		windows.ProcessBasicInformation,
@@ -87,7 +98,6 @@ func procBasicInfo(handle windows.Handle) (pbi windows.PROCESS_BASIC_INFORMATION
 }
 
 func fillRemotePEB(hProc windows.Handle, pbi *windows.PROCESS_BASIC_INFORMATION) error {
-
 	// read in top level peb
 	base := unsafe.Pointer(pbi.PebBaseAddress)
 	pbi.PebBaseAddress = &windows.PEB{}
@@ -104,15 +114,6 @@ func fillRemotePEB(hProc windows.Handle, pbi *windows.PROCESS_BASIC_INFORMATION)
 	size = uint32(unsafe.Sizeof(*pbi.PebBaseAddress.Ldr))
 	dest = unsafe.Pointer(pbi.PebBaseAddress.Ldr)
 	err = readMemory(hProc, base, dest, size)
-	if err != nil {
-		return err
-	}
-
-	// base = unsafe.Pointer(&pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList)
-	// pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList = windows.LIST_ENTRY{}
-	// dest = unsafe.Pointer(&pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList)
-	// size = uint32(unsafe.Sizeof(pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList))
-	// err = readMemory(hProc, base, dest, size)
 	return err
 }
 
