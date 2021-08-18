@@ -17,6 +17,20 @@ func HandleForPid(pid int) (handle windows.Handle, err error) {
 	return
 }
 
+func GetPEB(handle windows.Handle) (peb windows.PEB, err error) {
+	pbi, err := ProcBasicInfo(handle)
+	if err != nil {
+		return
+	}
+
+	err = fillPEB(handle, &pbi)
+	if err != nil {
+		return
+	}
+	peb = *pbi.PebBaseAddress
+	return
+}
+
 func ProcBasicInfo(handle windows.Handle) (pbi windows.PROCESS_BASIC_INFORMATION, err error) {
 	pbiSize := unsafe.Sizeof(windows.PROCESS_BASIC_INFORMATION{})
 	var returnedLen uint32
@@ -27,26 +41,6 @@ func ProcBasicInfo(handle windows.Handle) (pbi windows.PROCESS_BASIC_INFORMATION
 		uint32(pbiSize),
 		&returnedLen)
 	return
-}
-
-func FillRemotePEB(hProc windows.Handle, pbi *windows.PROCESS_BASIC_INFORMATION) error {
-	// read in top level peb
-	base := unsafe.Pointer(pbi.PebBaseAddress)
-	pbi.PebBaseAddress = &windows.PEB{}
-	size := uint32(unsafe.Sizeof(*pbi.PebBaseAddress))
-	dest := unsafe.Pointer(pbi.PebBaseAddress)
-	err := ReadMemory(hProc, base, dest, size)
-	if err != nil {
-		return err
-	}
-
-	// with peb.Ldr populated with the remote Ldr pointer, re-read
-	base = unsafe.Pointer(pbi.PebBaseAddress.Ldr)
-	pbi.PebBaseAddress.Ldr = &windows.PEB_LDR_DATA{}
-	size = uint32(unsafe.Sizeof(*pbi.PebBaseAddress.Ldr))
-	dest = unsafe.Pointer(pbi.PebBaseAddress.Ldr)
-	err = ReadMemory(hProc, base, dest, size)
-	return err
 }
 
 func ReadMemory(hProc windows.Handle, start unsafe.Pointer, dest unsafe.Pointer, readLen uint32) error {
@@ -65,4 +59,24 @@ func ReadMemory(hProc windows.Handle, start unsafe.Pointer, dest unsafe.Pointer,
 		return fmt.Errorf("readProcessMemory: %s", code.Errno().Error())
 	}
 	return nil
+}
+
+func fillPEB(handle windows.Handle, pbi *windows.PROCESS_BASIC_INFORMATION) error {
+	// read in top level peb
+	base := unsafe.Pointer(pbi.PebBaseAddress)
+	pbi.PebBaseAddress = &windows.PEB{}
+	size := uint32(unsafe.Sizeof(*pbi.PebBaseAddress))
+	dest := unsafe.Pointer(pbi.PebBaseAddress)
+	err := ReadMemory(handle, base, dest, size)
+	if err != nil {
+		return err
+	}
+
+	// with peb.Ldr populated with the remote Ldr pointer, re-read
+	base = unsafe.Pointer(pbi.PebBaseAddress.Ldr)
+	pbi.PebBaseAddress.Ldr = &windows.PEB_LDR_DATA{}
+	size = uint32(unsafe.Sizeof(*pbi.PebBaseAddress.Ldr))
+	dest = unsafe.Pointer(pbi.PebBaseAddress.Ldr)
+	err = ReadMemory(handle, base, dest, size)
+	return err
 }

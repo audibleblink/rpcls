@@ -27,12 +27,11 @@ func SePrivEnable(privString string) (err error) {
 	windows.OpenProcessToken(windows.CurrentProcess(), windows.TOKEN_ADJUST_PRIVILEGES, &tokenH)
 	defer tokenH.Close()
 
-	prevLen := uint32(0)
 	return windows.AdjustTokenPrivileges(
 		tokenH,
 		false,
 		privs,
 		uint32(unsafe.Sizeof(privs)),
 		nil,
-		&prevLen)
+		nil)
 }

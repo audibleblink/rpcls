@@ -9,11 +9,7 @@ import (
 
 	"github.com/audibleblink/rpcls/pkg/memutils"
 	"github.com/audibleblink/rpcls/pkg/privs"
-)
-
-const (
-	// PID = 15080
-	PID = 0
+	"github.com/audibleblink/rpcls/pkg/procs"
 )
 
 func main() {
@@ -23,56 +19,65 @@ func main() {
 		os.Exit(1)
 	}
 
-	pidHandle, err := memutils.HandleForPid(PID)
+	processes, err := procs.Processes()
 	if err != nil {
-		fmt.Printf("pidHandle: %s\n", err)
+		fmt.Printf("processes: %s\n", err)
 		os.Exit(1)
 	}
 
-	pbi, err := memutils.ProcBasicInfo(pidHandle)
-	if err != nil {
-		fmt.Printf("getPBI: %s\n", err)
-		os.Exit(1)
-	}
-
-	err = memutils.FillRemotePEB(pidHandle, &pbi)
-	if err != nil {
-		fmt.Printf("readRemotePEB: %s\n", err)
-		os.Exit(1)
-	}
-
-	head := windows.LDR_DATA_TABLE_ENTRY{
-		InMemoryOrderLinks: pbi.PebBaseAddress.Ldr.InMemoryOrderModuleList,
-	}
-
-	for {
-		// read the current LIST_ENTRY flink into a LDR_DATA_TABLE_ENTRY,
-		// inherently casting it
-		base := unsafe.Pointer(head.InMemoryOrderLinks.Flink)
-		size := uint32(unsafe.Sizeof(head))
-		dest := unsafe.Pointer(&head.InMemoryOrderLinks.Flink)
-		err = memutils.ReadMemory(pidHandle, base, dest, size)
+	for _, proc := range processes {
+		pidHandle, err := memutils.HandleForPid(proc.Pid)
 		if err != nil {
-			fmt.Printf("could not move to next flink: %s\n", err)
+			fmt.Printf("pidHandle: %s\n", err)
 			os.Exit(1)
 		}
 
-		// populate the DLL Name buffer with the remote address currently
-		// stored at head.FullDllName
-		dllNameUTF16 := make([]uint16, head.FullDllName.Length)
-		base = unsafe.Pointer(head.FullDllName.Buffer)
-		size = uint32(head.FullDllName.Length)
-		dest = unsafe.Pointer(&dllNameUTF16[0])
-		err = memutils.ReadMemory(pidHandle, base, dest, size)
+		peb, err := memutils.GetPEB(pidHandle)
 		if err != nil {
-			fmt.Printf("could not read dll name string: %s\n", err)
+			fmt.Printf("getPEB: %s\n", err)
 			os.Exit(1)
 		}
 
-		name := windows.UTF16ToString(dllNameUTF16)
-		if name == "" {
-			os.Exit(0)
+		head := windows.LDR_DATA_TABLE_ENTRY{
+			InMemoryOrderLinks: peb.Ldr.InMemoryOrderModuleList,
 		}
-		fmt.Println(name)
+
+		isFirst := true
+		for {
+			// read the current LIST_ENTRY flink into a LDR_DATA_TABLE_ENTRY,
+			// inherently casting it
+			base := unsafe.Pointer(head.InMemoryOrderLinks.Flink)
+			size := uint32(unsafe.Sizeof(head))
+			dest := unsafe.Pointer(&head.InMemoryOrderLinks.Flink)
+			err = memutils.ReadMemory(pidHandle, base, dest, size)
+			if err != nil {
+				fmt.Printf("could not move to next flink: %s\n", err)
+				os.Exit(1)
+			}
+
+			// populate the DLL Name buffer with the remote address currently
+			// stored at head.FullDllName
+			dllNameUTF16 := make([]uint16, head.FullDllName.Length)
+			base = unsafe.Pointer(head.FullDllName.Buffer)
+			size = uint32(head.FullDllName.Length)
+			dest = unsafe.Pointer(&dllNameUTF16[0])
+			err = memutils.ReadMemory(pidHandle, base, dest, size)
+			if err != nil {
+				fmt.Printf("could not read dll name string: %s\n", err)
+				os.Exit(1)
+			}
+
+			name := windows.UTF16ToString(dllNameUTF16)
+			if name == "" {
+				break
+			}
+
+			if isFirst {
+				isFirst = false
+				fmt.Printf("\n%s\n", name)
+			} else {
+				fmt.Println(name)
+			}
+		}
 	}
 }
