@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"unsafe"
@@ -12,10 +13,21 @@ import (
 	"github.com/audibleblink/rpcls/pkg/procs"
 )
 
+const (
+	RPCRT4DLL = `C:\WINDOWS\System32\RPCRT4.dll`
+)
+
+type result struct {
+	Name string `json:"name"`
+	Pid  int    `json:"pid"`
+	Cmd  string `json:"cmd"`
+	Path string `json:"path"`
+}
+
 func main() {
 	err := privs.SePrivEnable("SeDebugPrivilege")
 	if err != nil {
-		fmt.Printf("seDebug: %s\n", err)
+		fmt.Printf("sePrivEnable: %s\n", err)
 		os.Exit(1)
 	}
 
@@ -28,21 +40,20 @@ func main() {
 	for _, proc := range processes {
 		pidHandle, err := memutils.HandleForPid(proc.Pid)
 		if err != nil {
-			fmt.Printf("pidHandle: %s\n", err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "handleForPid: %s\n", err)
+			continue
 		}
 
 		peb, err := memutils.GetPEB(pidHandle)
 		if err != nil {
-			fmt.Printf("getPEB: %s\n", err)
-			os.Exit(1)
+			fmt.Fprintf(os.Stderr, "getPEB: %s\n", err)
+			continue
 		}
 
 		head := windows.LDR_DATA_TABLE_ENTRY{
 			InMemoryOrderLinks: peb.Ldr.InMemoryOrderModuleList,
 		}
 
-		isFirst := true
 		for {
 			// read the current LIST_ENTRY flink into a LDR_DATA_TABLE_ENTRY,
 			// inherently casting it
@@ -57,26 +68,39 @@ func main() {
 
 			// populate the DLL Name buffer with the remote address currently
 			// stored at head.FullDllName
-			dllNameUTF16 := make([]uint16, head.FullDllName.Length)
-			base = unsafe.Pointer(head.FullDllName.Buffer)
-			size = uint32(head.FullDllName.Length)
-			dest = unsafe.Pointer(&dllNameUTF16[0])
-			err = memutils.ReadMemory(pidHandle, base, dest, size)
+			name, err := memutils.PopulateStrings(pidHandle, &head.FullDllName)
 			if err != nil {
 				fmt.Printf("could not read dll name string: %s\n", err)
 				os.Exit(1)
 			}
 
-			name := windows.UTF16ToString(dllNameUTF16)
 			if name == "" {
 				break
 			}
 
-			if isFirst {
-				isFirst = false
-				fmt.Printf("\n%s\n", name)
-			} else {
-				fmt.Println(name)
+			isMatch := name == RPCRT4DLL
+
+			if isMatch {
+				params := peb.ProcessParameters
+
+				cmd, err := memutils.PopulateStrings(pidHandle, &params.CommandLine)
+				if err != nil {
+					fmt.Printf("could not read cmd string: %s\n", err)
+				}
+				path, err := memutils.PopulateStrings(pidHandle, &params.ImagePathName)
+				if err != nil {
+					fmt.Printf("could not read path string: %s\n", err)
+				}
+
+				r := result{proc.Exe, proc.Pid, cmd, path}
+
+				out, err := json.Marshal(r)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "jsonMarshal: %s\n", err)
+					break
+				}
+				fmt.Println(string(out))
+				isMatch = false
 			}
 		}
 	}
