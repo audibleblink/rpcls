@@ -95,10 +95,13 @@ func main() {
 				os.Exit(1)
 			}
 
+			// we're at the last dll in the linked-list
 			if name == "" {
 				break
 			}
 
+			// first run through of the pe list is the hosting process
+			// we take SizeOfImage so we know how much to read in later
 			if first {
 				newLdr := (*PebLdrDataTableEntry64)(unsafe.Pointer(&head))
 				selfPESize = newLdr.SizeOfImage
@@ -108,40 +111,45 @@ func main() {
 			isMatch := name == RPCRT4DLL
 
 			if isMatch {
-
 				peData := make([]byte, selfPESize)
-				// err := memutils.ReadMemory(pidHandle, unsafe.Pointer(peb.ImageBaseAddress), unsafe.Pointer(&peData[0]), 1024)
-
-				procNtReadVirtualMemory := windows.NewLazySystemDLL("ntdll.dll").NewProc("NtReadVirtualMemory")
-				t, _, _ := procNtReadVirtualMemory.Call(
-					uintptr(pidHandle),                  // hProcess
-					peb.ImageBaseAddress,                // start address
-					uintptr(unsafe.Pointer(&peData[0])), // destBuffer
-					uintptr(selfPESize),                 // bytes to read
-					0,                                   // post-read count
+				err := memutils.ReadMemory(
+					pidHandle,
+					unsafe.Pointer(peb.ImageBaseAddress),
+					unsafe.Pointer(&peData[0]),
+					uint32(selfPESize),
 				)
-
-				peReader := bytes.NewReader(peData)
-
-				peFile, err := pe.NewFileFromMemory(peReader)
-				if t != 0 {
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "could not read pe from memory: %s\n", err)
 					break
 				}
+
+				peReader := bytes.NewReader(peData)
+				peFile, err := pe.NewFileFromMemory(peReader)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "could not create pe from memory: %s\n", err)
+					break
+				}
+
 				imports, err := peFile.ImportedSymbols()
 				if err != nil {
-					panic(1)
+					fmt.Fprintf(os.Stderr, "could not read pe imports: %s\n", err)
+					break
 				}
 
 				role := getRole(imports)
+				if role == "" {
+					break
+				}
+
 				params := peb.ProcessParameters
 
 				cmd, err := memutils.PopulateStrings(pidHandle, &params.CommandLine)
 				if err != nil {
-					fmt.Printf("could not read cmd string: %s\n", err)
+					fmt.Fprintf(os.Stderr, "could not read cmd string: %s\n", err)
 				}
 				path, err := memutils.PopulateStrings(pidHandle, &params.ImagePathName)
 				if err != nil {
-					fmt.Printf("could not read path string: %s\n", err)
+					fmt.Fprintf(os.Stderr, "could not read path string: %s\n", err)
 				}
 
 				r := result{proc.Exe, proc.Pid, cmd, path, role}
@@ -181,6 +189,6 @@ func getRole(imports []string) string {
 	} else if isServer {
 		return "SERVER"
 	} else {
-		return "HUH?"
+		return ""
 	}
 }
