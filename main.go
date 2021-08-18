@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 
+	"github.com/Binject/debug/pe"
 	"github.com/audibleblink/rpcls/pkg/memutils"
 	"github.com/audibleblink/rpcls/pkg/privs"
 	"github.com/audibleblink/rpcls/pkg/procs"
@@ -22,6 +25,22 @@ type result struct {
 	Pid  int    `json:"pid"`
 	Cmd  string `json:"cmd"`
 	Path string `json:"path"`
+	Role string `json:"role"`
+}
+
+type PebLdrDataTableEntry64 struct {
+	InOrderLinks               [16]byte
+	InMemoryOrderLinks         [16]byte
+	InInitializationOrderLinks [16]byte
+	DllBase                    uint64
+	EntryPoint                 uint64
+	SizeOfImage                uint64
+	FullDllName                windows.NTString
+	BaseDllName                windows.NTString
+	Flags                      uint32
+	LoadCount                  uint16 // named ObseleteLoadCount OS6.2+
+	TlsIndex                   uint16
+	HashLinks                  [16]byte // increase by PVOID+ULONG if <OS6.2
 }
 
 func main() {
@@ -54,6 +73,8 @@ func main() {
 			InMemoryOrderLinks: peb.Ldr.InMemoryOrderModuleList,
 		}
 
+		var selfPESize uint64
+		first := true
 		for {
 			// read the current LIST_ENTRY flink into a LDR_DATA_TABLE_ENTRY,
 			// inherently casting it
@@ -78,9 +99,40 @@ func main() {
 				break
 			}
 
+			if first {
+				newLdr := (*PebLdrDataTableEntry64)(unsafe.Pointer(&head))
+				selfPESize = newLdr.SizeOfImage
+				first = false
+			}
+
 			isMatch := name == RPCRT4DLL
 
 			if isMatch {
+
+				peData := make([]byte, selfPESize)
+				// err := memutils.ReadMemory(pidHandle, unsafe.Pointer(peb.ImageBaseAddress), unsafe.Pointer(&peData[0]), 1024)
+
+				procNtReadVirtualMemory := windows.NewLazySystemDLL("ntdll.dll").NewProc("NtReadVirtualMemory")
+				t, _, _ := procNtReadVirtualMemory.Call(
+					uintptr(pidHandle),                  // hProcess
+					peb.ImageBaseAddress,                // start address
+					uintptr(unsafe.Pointer(&peData[0])), // destBuffer
+					uintptr(selfPESize),                 // bytes to read
+					0,                                   // post-read count
+				)
+
+				peReader := bytes.NewReader(peData)
+
+				peFile, err := pe.NewFileFromMemory(peReader)
+				if t != 0 {
+					break
+				}
+				imports, err := peFile.ImportedSymbols()
+				if err != nil {
+					panic(1)
+				}
+
+				role := getRole(imports)
 				params := peb.ProcessParameters
 
 				cmd, err := memutils.PopulateStrings(pidHandle, &params.CommandLine)
@@ -92,7 +144,7 @@ func main() {
 					fmt.Printf("could not read path string: %s\n", err)
 				}
 
-				r := result{proc.Exe, proc.Pid, cmd, path}
+				r := result{proc.Exe, proc.Pid, cmd, path, role}
 
 				out, err := json.Marshal(r)
 				if err != nil {
@@ -103,5 +155,32 @@ func main() {
 				isMatch = false
 			}
 		}
+	}
+}
+
+func getRole(imports []string) string {
+	serverRole := "RpcServerRegister"
+	clientRole := "RpcBinding"
+
+	var isClient bool
+	var isServer bool
+
+	for _, imp := range imports {
+		if strings.HasPrefix(imp, serverRole) {
+			isServer = true
+		}
+		if strings.HasPrefix(imp, clientRole) {
+			isClient = true
+		}
+	}
+
+	if isClient && isServer {
+		return "BOTH"
+	} else if isClient {
+		return "CLIENT"
+	} else if isServer {
+		return "SERVER"
+	} else {
+		return "HUH?"
 	}
 }
