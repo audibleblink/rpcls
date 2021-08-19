@@ -1,6 +1,7 @@
 package procs
 
 import (
+	"fmt"
 	"syscall"
 	"unsafe"
 
@@ -18,7 +19,7 @@ type WindowsProcess struct {
 func Processes() ([]WindowsProcess, error) {
 	handle, err := windows.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processes | create_snapshot | %s", err)
 	}
 	defer windows.CloseHandle(handle)
 
@@ -27,7 +28,7 @@ func Processes() ([]WindowsProcess, error) {
 	// get the first process
 	err = windows.Process32First(handle, &entry)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processes | process_first | %s", err)
 	}
 
 	results := make([]WindowsProcess, 0, 50)
@@ -40,7 +41,8 @@ func Processes() ([]WindowsProcess, error) {
 			if err == syscall.ERROR_NO_MORE_FILES {
 				return results, nil
 			}
-			return nil, err
+			err = fmt.Errorf("processes | %s", err)
+			return results, fmt.Errorf("processes | process_next | %s", err)
 		}
 	}
 }

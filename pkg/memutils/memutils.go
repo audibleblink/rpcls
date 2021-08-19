@@ -7,13 +7,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func HandleForPid(pid int) (handle windows.Handle, err error) {
+func HandleForPid(pid int, privs int) (handle windows.Handle, err error) {
 	if pid == 0 {
 		handle = windows.CurrentProcess()
 		return
 	}
-	attrs := windows.PROCESS_QUERY_INFORMATION | windows.PROCESS_VM_READ
+	attrs := privs
 	handle, err = windows.OpenProcess(uint32(attrs), true, uint32(pid))
+	if err != nil {
+		err = fmt.Errorf("handleForPid | %d | %s", pid, err)
+	}
 	return
 }
 
@@ -25,6 +28,7 @@ func GetPEB(handle windows.Handle) (peb windows.PEB, err error) {
 
 	err = fillPEB(handle, &pbi)
 	if err != nil {
+		err = fmt.Errorf("getPEB | %s", err)
 		return
 	}
 	peb = *pbi.PebBaseAddress
@@ -40,6 +44,10 @@ func ProcBasicInfo(handle windows.Handle) (pbi windows.PROCESS_BASIC_INFORMATION
 		unsafe.Pointer(&pbi),
 		uint32(pbiSize),
 		&returnedLen)
+	if err != nil {
+		err = fmt.Errorf("procBasicInfo | %s", err)
+		return
+	}
 	return
 }
 
@@ -56,7 +64,7 @@ func ReadMemory(hProc windows.Handle, start unsafe.Pointer, dest unsafe.Pointer,
 
 	code := (windows.NTStatus)(uint32(ret))
 	if ret != 0 {
-		return fmt.Errorf("readMemory: %s", code.Errno().Error())
+		return fmt.Errorf("readMemory | %s", code.Errno().Error())
 	}
 	return nil
 }
@@ -69,7 +77,7 @@ func fillPEB(handle windows.Handle, pbi *windows.PROCESS_BASIC_INFORMATION) erro
 	dest := unsafe.Pointer(pbi.PebBaseAddress)
 	err := ReadMemory(handle, base, dest, size)
 	if err != nil {
-		return fmt.Errorf("fillPEB: process_basic_information: %s", err)
+		return fmt.Errorf("fillPEB | process_basic_information | %s", err)
 	}
 
 	// with peb.Ldr populated with the remote Ldr pointer, re-read
@@ -79,7 +87,7 @@ func fillPEB(handle windows.Handle, pbi *windows.PROCESS_BASIC_INFORMATION) erro
 	dest = unsafe.Pointer(pbi.PebBaseAddress.Ldr)
 	err = ReadMemory(handle, base, dest, size)
 	if err != nil {
-		return fmt.Errorf("fillPEB: peb.Ldr: %s", err)
+		return fmt.Errorf("fillPEB | peb.Ldr | %s", err)
 	}
 
 	// also fill peb with process_parameters
@@ -89,7 +97,7 @@ func fillPEB(handle windows.Handle, pbi *windows.PROCESS_BASIC_INFORMATION) erro
 	dest = unsafe.Pointer(pbi.PebBaseAddress.ProcessParameters)
 	err = ReadMemory(handle, base, dest, size)
 	if err != nil {
-		return fmt.Errorf("failed to read process_parameters: %s", err)
+		return fmt.Errorf("fillPEB | proc_params | %s", err)
 	}
 	return err
 }
@@ -100,5 +108,8 @@ func PopulateStrings(pidHandle windows.Handle, ntString *windows.NTUnicodeString
 	size := uint32(ntString.Length)
 	dest := unsafe.Pointer(&dllNameUTF16[0])
 	err := ReadMemory(pidHandle, base, dest, size)
+	if err != nil {
+		return "", fmt.Errorf("fillPEB | proc_params | %s", err)
+	}
 	return windows.UTF16ToString(dllNameUTF16), err
 }

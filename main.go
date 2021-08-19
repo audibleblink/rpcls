@@ -20,9 +20,10 @@ const (
 	RPCRT4DLL = `C:\WINDOWS\System32\RPCRT4.dll`
 )
 
-type result struct {
-	Name string `json:"name"`
+type Result struct {
 	Pid  int    `json:"pid"`
+	Name string `json:"name"`
+	User string `json:"user"`
 	Cmd  string `json:"cmd"`
 	Path string `json:"path"`
 	Role string `json:"role"`
@@ -46,26 +47,34 @@ type PebLdrDataTableEntry64 struct {
 func main() {
 	err := privs.SePrivEnable("SeDebugPrivilege")
 	if err != nil {
-		fmt.Printf("sePrivEnable: %s\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	processes, err := procs.Processes()
 	if err != nil {
-		fmt.Printf("processes: %s\n", err)
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	for _, proc := range processes {
-		pidHandle, err := memutils.HandleForPid(proc.Pid)
+		prvs := windows.PROCESS_QUERY_INFORMATION | windows.PROCESS_VM_READ
+		pidHandle, err := memutils.HandleForPid(proc.Pid, prvs)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "handleForPid: %s\n", err)
+			fmt.Fprintln(os.Stderr, err)
+			continue
+		}
+
+		user, err := privs.TokenOwner(pidHandle)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintf(os.Stderr, "%s (%d) | %s\n", proc.Exe, proc.Pid, err)
 			continue
 		}
 
 		peb, err := memutils.GetPEB(pidHandle)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "getPEB: %s\n", err)
+			fmt.Fprintf(os.Stderr, "%s (%d) | %s\n", proc.Exe, proc.Pid, err)
 			continue
 		}
 
@@ -83,16 +92,16 @@ func main() {
 			dest := unsafe.Pointer(&head.InMemoryOrderLinks.Flink)
 			err = memutils.ReadMemory(pidHandle, base, dest, size)
 			if err != nil {
-				fmt.Printf("could not move to next flink: %s\n", err)
-				os.Exit(1)
+				fmt.Fprintf(os.Stderr, "main | next_flink | %s\n", err)
+				continue
 			}
 
 			// populate the DLL Name buffer with the remote address currently
 			// stored at head.FullDllName
 			name, err := memutils.PopulateStrings(pidHandle, &head.FullDllName)
 			if err != nil {
-				fmt.Printf("could not read dll name string: %s\n", err)
-				os.Exit(1)
+				fmt.Fprintf(os.Stderr, "main | pop_dll_name | %s\n", err)
+				continue
 			}
 
 			// we're at the last dll in the linked-list
@@ -111,50 +120,39 @@ func main() {
 			isMatch := name == RPCRT4DLL
 
 			if isMatch {
-				peData := make([]byte, selfPESize)
-				err := memutils.ReadMemory(
-					pidHandle,
-					unsafe.Pointer(peb.ImageBaseAddress),
-					unsafe.Pointer(&peData[0]),
-					uint32(selfPESize),
-				)
+				// fetch the strings located at the address indicated
+				// the peb's ProcessParameters
+				params := peb.ProcessParameters
+				cmd, err := memutils.PopulateStrings(pidHandle, &params.CommandLine)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "could not read pe from memory: %s\n", err)
-					break
+					fmt.Fprintf(os.Stderr, "can't read cmd | %s (%d) | %s\n", name, proc.Pid, err)
+				}
+				path, err := memutils.PopulateStrings(pidHandle, &params.ImagePathName)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "can't read proc path | %s (%d) | %s\n", name, proc.Pid, err)
 				}
 
-				peReader := bytes.NewReader(peData)
-				peFile, err := pe.NewFileFromMemory(peReader)
+				// extract the process' PE from memory
+				peFile, err := carveOutPE(pidHandle, peb, selfPESize)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "could not create pe from memory: %s\n", err)
+					fmt.Fprintf(os.Stderr, "carveOutPE | %s (%d) | %s\n", path, proc.Pid, err)
 					break
 				}
 
 				imports, err := peFile.ImportedSymbols()
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "could not read pe imports: %s\n", err)
+					fmt.Fprintf(os.Stderr, "can't read imports | %s (%d) | %s\n", path, proc.Pid, err)
 					break
 				}
 
+				// is it a server, client, both, or neither
 				role := getRole(imports)
 				if role == "" {
 					break
 				}
 
-				params := peb.ProcessParameters
-
-				cmd, err := memutils.PopulateStrings(pidHandle, &params.CommandLine)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "could not read cmd string: %s\n", err)
-				}
-				path, err := memutils.PopulateStrings(pidHandle, &params.ImagePathName)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "could not read path string: %s\n", err)
-				}
-
-				r := result{proc.Exe, proc.Pid, cmd, path, role}
-
-				out, err := json.Marshal(r)
+				result := Result{proc.Pid, proc.Exe, user, cmd, path, role}
+				out, err := json.Marshal(result)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "jsonMarshal: %s\n", err)
 					break
@@ -166,6 +164,8 @@ func main() {
 	}
 }
 
+// searches imported functions and checks if any indicate
+// the role of hosting image as being and client or server
 func getRole(imports []string) string {
 	serverRole := "RpcServerRegister"
 	clientRole := "RpcBinding"
@@ -191,4 +191,27 @@ func getRole(imports []string) string {
 	} else {
 		return ""
 	}
+}
+
+func carveOutPE(hProc windows.Handle, peb windows.PEB, peSize uint64) (pe.File, error) {
+	// read in the PE from process memory
+	peData := make([]byte, peSize)
+	err := memutils.ReadMemory(
+		hProc,
+		unsafe.Pointer(peb.ImageBaseAddress),
+		unsafe.Pointer(&peData[0]),
+		uint32(peSize),
+	)
+	if err != nil {
+		return pe.File{}, fmt.Errorf("can't read pe | %s", err)
+	}
+
+	// convert the memory bytes into an in-memory, parsed, PE
+	peReader := bytes.NewReader(peData)
+	peFile, err := pe.NewFileFromMemory(peReader)
+	if err != nil {
+		return pe.File{}, fmt.Errorf("can't create pe | %s", err)
+	}
+
+	return *peFile, err
 }
