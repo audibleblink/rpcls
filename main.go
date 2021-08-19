@@ -112,6 +112,8 @@ func main() {
 			// first run through of the pe list is the hosting process
 			// we take SizeOfImage so we know how much to read in later
 			if first {
+				// have to cast to this custom struct becuase the built-in
+				// sys/windows one doesn't export it
 				newLdr := (*PebLdrDataTableEntry64)(unsafe.Pointer(&head))
 				selfPESize = newLdr.SizeOfImage
 				first = false

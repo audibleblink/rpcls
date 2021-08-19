@@ -60,3 +60,33 @@ func TokenOwner(procH windows.Handle) (string, error) {
 
 	return fmt.Sprintf(`%s\%s`, d, u), err
 }
+
+// func HasPrivilege(hProc windows.Handle, privText string) bool {
+// 	procCheckPrivilege := windows.NewLazySystemDLL("advapi32.dll").NewProc("CheckPrivilege")
+// 	ret, _, _ := procCheckPrivilege.Call(
+// 		uintptr(hProc),
+// 		someluids,
+// 		filter one or all?,
+// 		*bool
+// 	)
+// // ADVAPI32.dll
+// }
+
+// ClientToken A handle to an access token representing a client process. This
+// handle must have been obtained by opening the token of a thread impersonating
+// the client. The token must be open for TOKEN_QUERY access.
+
+// RequiredPrivileges A pointer to a PRIVILEGE_SET structure. The Privilege member
+// of this structure is an array of LUID_AND_ATTRIBUTES structures. Before calling
+// PrivilegeCheck, use the Privilege array to indicate the set of privileges to
+// check. Set the Control member to PRIVILEGE_SET_ALL_NECESSARY if all of the
+// privileges must be enabled; or set it to zero if it is sufficient that any one
+// of the privileges be enabled.  When PrivilegeCheck returns, the Attributes
+// member of each LUID_AND_ATTRIBUTES structure is set to
+// SE_PRIVILEGE_USED_FOR_ACCESS if the corresponding privilege is enabled.
+
+// pfResult A pointer to a value the function sets to indicate whether any or all
+// of the specified privileges are enabled in the access token. If the Control
+// member of the PRIVILEGE_SET structure specifies PRIVILEGE_SET_ALL_NECESSARY,
+// this value is TRUE only if all the privileges are enabled; otherwise, this value
+// is TRUE if any of the privileges are enabled.
