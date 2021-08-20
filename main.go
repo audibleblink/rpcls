@@ -17,7 +17,9 @@ import (
 )
 
 const (
-	RPCRT4DLL = `C:\WINDOWS\System32\RPCRT4.dll`
+	RPCRT4DLL  = `C:\WINDOWS\System32\RPCRT4.dll`
+	serverRole = "RpcServerListen"
+	clientRole = "RpcStringBindingCompose"
 )
 
 type Result struct {
@@ -83,7 +85,7 @@ func main() {
 		}
 
 		var selfPESize uint64
-		first := true
+		firstRun := true
 		for {
 			// read the current LIST_ENTRY flink into a LDR_DATA_TABLE_ENTRY,
 			// inherently casting it
@@ -109,21 +111,21 @@ func main() {
 				break
 			}
 
-			// first run through of the pe list is the hosting process
+			// the first entry in the pe list is the hosting process
 			// we take SizeOfImage so we know how much to read in later
-			if first {
+			if firstRun {
 				// have to cast to this custom struct becuase the built-in
 				// sys/windows one doesn't export it
 				newLdr := (*PebLdrDataTableEntry64)(unsafe.Pointer(&head))
 				selfPESize = newLdr.SizeOfImage
-				first = false
+				firstRun = false
 			}
 
 			isMatch := name == RPCRT4DLL
 
 			if isMatch {
 				// fetch the strings located at the address indicated
-				// the peb's ProcessParameters
+				// in the peb's ProcessParameters
 				params := peb.ProcessParameters
 				cmd, err := memutils.PopulateStrings(pidHandle, &params.CommandLine)
 				if err != nil {
@@ -169,9 +171,6 @@ func main() {
 // searches imported functions and checks if any indicate
 // the role of hosting image as being and client or server
 func getRole(imports []string) string {
-	serverRole := "RpcServerRegister"
-	clientRole := "RpcBinding"
-
 	var isClient bool
 	var isServer bool
 
