@@ -11,8 +11,8 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/Binject/debug/pe"
+	"github.com/audibleblink/getsystem"
 	"github.com/audibleblink/rpcls/pkg/memutils"
-	"github.com/audibleblink/rpcls/pkg/privs"
 	"github.com/audibleblink/rpcls/pkg/procs"
 )
 
@@ -47,17 +47,14 @@ type PebLdrDataTableEntry64 struct {
 }
 
 func main() {
-	err := privs.SePrivEnable("SeDebugPrivilege")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
 
 	processes, err := procs.Processes()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	getsystem.DebugPriv()
 
 	for _, proc := range processes {
 		prvs := windows.PROCESS_QUERY_INFORMATION | windows.PROCESS_VM_READ
@@ -67,9 +64,8 @@ func main() {
 			continue
 		}
 
-		user, err := privs.TokenOwner(pidHandle)
+		user, err := getsystem.TokenOwnerFromPid(proc.Pid)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
 			fmt.Fprintf(os.Stderr, "%s (%d) | %s\n", proc.Exe, proc.Pid, err)
 			continue
 		}

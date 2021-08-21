@@ -1,4 +1,6 @@
 github.com/Binject/debug v0.0.0-20210312092933-6277045c2fdf h1:Cx4YJvjPZD91xiffqJOq8l3j1YKcvx3+8duqq7DX9gY=
 github.com/Binject/debug v0.0.0-20210312092933-6277045c2fdf/go.mod h1:QzgxDLY/qdKlvnbnb65eqTedhvQPbaSP2NqIbcuKvsQ=
-golang.org/x/sys v0.0.0-20210809222454-d867a43fc93e h1:WUoyKPm6nCo1BnNUvPGnFG3T5DUVem42yDJZZ4CNxMA=
-golang.org/x/sys v0.0.0-20210809222454-d867a43fc93e/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
+github.com/audibleblink/getsystem v0.1.1 h1:2Xwj9ef53sOu5M7ArG8j/jr3rb1WQyTNJ/PlWChgrdY=
+github.com/audibleblink/getsystem v0.1.1/go.mod h1:JAoOsoqmC5st/9PtYBmTiP/5c7Bi75HhzXgHUSMJuuo=
+golang.org/x/sys v0.0.0-20210820121016-41cdb8703e55 h1:rw6UNGRMfarCepjI8qOepea/SXwIBVfTKjztZ5gBbq4=
+golang.org/x/sys v0.0.0-20210820121016-41cdb8703e55/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
