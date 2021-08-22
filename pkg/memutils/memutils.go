@@ -1,9 +1,11 @@
 package memutils
 
 import (
+	"bytes"
 	"fmt"
 	"unsafe"
 
+	"github.com/Binject/debug/pe"
 	"golang.org/x/sys/windows"
 )
 
@@ -112,4 +114,27 @@ func PopulateStrings(pidHandle windows.Handle, ntString *windows.NTUnicodeString
 		return "", fmt.Errorf("fillPEB | proc_params | %s", err)
 	}
 	return windows.UTF16ToString(dllNameUTF16), err
+}
+
+func CarveOutPE(hProc windows.Handle, peb windows.PEB, peSize uint64) (pe.File, error) {
+	// read in the PE from process memory
+	peData := make([]byte, peSize)
+	err := ReadMemory(
+		hProc,
+		unsafe.Pointer(peb.ImageBaseAddress),
+		unsafe.Pointer(&peData[0]),
+		uint32(peSize),
+	)
+	if err != nil {
+		return pe.File{}, fmt.Errorf("can't read pe | %s", err)
+	}
+
+	// convert the memory bytes into an in-memory, parsed, PE
+	peReader := bytes.NewReader(peData)
+	peFile, err := pe.NewFileFromMemory(peReader)
+	if err != nil {
+		return pe.File{}, fmt.Errorf("can't create pe | %s", err)
+	}
+
+	return *peFile, err
 }

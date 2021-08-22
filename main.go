@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -10,7 +10,6 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/Binject/debug/pe"
 	"github.com/audibleblink/getsystem"
 	"github.com/audibleblink/rpcls/pkg/memutils"
 	"github.com/audibleblink/rpcls/pkg/procs"
@@ -46,7 +45,23 @@ type PebLdrDataTableEntry64 struct {
 	HashLinks                  [16]byte // increase by PVOID+ULONG if <OS6.2
 }
 
+var doSystem bool
+
+func init() {
+	flag.BoolVar(&doSystem, "system", false, "launch system prompt")
+	flag.Parse()
+}
+
 func main() {
+
+	if doSystem {
+		pid := procs.PidForName("winlogon.exe")
+		err := getsystem.InNewProcess(pid, "cmd.exe", false)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "You sure you're admin?")
+		}
+		os.Exit(0)
+	}
 
 	processes, err := procs.Processes()
 	if err != nil {
@@ -111,7 +126,7 @@ func main() {
 			// we take SizeOfImage so we know how much to read in later
 			if firstRun {
 				// have to cast to this custom struct becuase the built-in
-				// sys/windows one doesn't export it
+				// sys/windows one doesn't export SizeOfImage
 				newLdr := (*PebLdrDataTableEntry64)(unsafe.Pointer(&head))
 				selfPESize = newLdr.SizeOfImage
 				firstRun = false
@@ -133,7 +148,7 @@ func main() {
 				}
 
 				// extract the process' PE from memory
-				peFile, err := carveOutPE(pidHandle, peb, selfPESize)
+				peFile, err := memutils.CarveOutPE(pidHandle, peb, selfPESize)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "carveOutPE | %s (%d) | %s\n", path, proc.Pid, err)
 					break
@@ -188,27 +203,4 @@ func getRole(imports []string) string {
 	} else {
 		return ""
 	}
-}
-
-func carveOutPE(hProc windows.Handle, peb windows.PEB, peSize uint64) (pe.File, error) {
-	// read in the PE from process memory
-	peData := make([]byte, peSize)
-	err := memutils.ReadMemory(
-		hProc,
-		unsafe.Pointer(peb.ImageBaseAddress),
-		unsafe.Pointer(&peData[0]),
-		uint32(peSize),
-	)
-	if err != nil {
-		return pe.File{}, fmt.Errorf("can't read pe | %s", err)
-	}
-
-	// convert the memory bytes into an in-memory, parsed, PE
-	peReader := bytes.NewReader(peData)
-	peFile, err := pe.NewFileFromMemory(peReader)
-	if err != nil {
-		return pe.File{}, fmt.Errorf("can't create pe | %s", err)
-	}
-
-	return *peFile, err
 }

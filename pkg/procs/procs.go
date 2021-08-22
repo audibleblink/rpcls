@@ -63,3 +63,13 @@ func NewWindowsProcess(e *windows.ProcessEntry32) WindowsProcess {
 		Exe:  syscall.UTF16ToString(e.ExeFile[:end]),
 	}
 }
+
+func PidForName(processName string) int {
+	processes, _ := Processes()
+	for _, process := range processes {
+		if processName == process.Exe {
+			return process.Pid
+		}
+	}
+	return 0
+}
